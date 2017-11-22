@@ -1,6 +1,6 @@
 ---
 title: "STAT/MATH 495: Problem Set 10"
-author: "WRITE YOUR NAME(S) HERE"
+author: "Jonathan Che"
 date: "2017-11-28"
 output:
   html_document:
@@ -16,17 +16,9 @@ output:
 knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=4.5, message=FALSE, warning = FALSE)
 ```
 
-
-
-# Collaboration
-
-Please indicate who you collaborated with on this assignment: 
-
-
-
 # Setup
 
-```{r}
+```{r, include=FALSE}
 library(tidyverse)
 library(broom)
 library(glmnet)
@@ -53,16 +45,120 @@ predictor_matrix_train <- model.matrix(model_formula, data = train)[, -1]
 predictor_matrix_test <- model.matrix(model_formula, data = test)[, -1]
 ```
 
-
 # Do work and create submission files:
 
-```{r}
-
+```{r, include=FALSE}
+get_LASSO_coefficients <- function(LASSO_fit){
+  coeff_values <- LASSO_fit %>% 
+    broom::tidy() %>% 
+    as_tibble() %>% 
+    select(-c(step, dev.ratio)) %>% 
+    tidyr::complete(lambda, nesting(term), fill = list(estimate = 0)) %>% 
+    arrange(desc(lambda)) %>% 
+    select(term, estimate, lambda)
+  return(coeff_values)
+}
 ```
 
+First, we fit a LASSO model to our training data, a sample of 150 observations from the Sberbank Russian Housing Market data.
 
+```{r}
+lambda_inputs <- 10^seq(-4, 0, length = 100)
+LASSO_fit <- glmnet(x=predictor_matrix_train, y=train$log_price_doc, alpha = 1, lambda = lambda_inputs)
+LASSO_coefficients <- get_LASSO_coefficients(LASSO_fit)
+```
 
+Next, we plot the beta-coefficients against lambda. For the sake of readability, I suppress the legend (for which colors correspond to which variables) in the plot.
 
+```{r}
+plot_LASSO_coefficients <- LASSO_coefficients %>% 
+  filter(term != "(Intercept)") %>% 
+  ggplot(aes(x=lambda, y=estimate, col=term)) +
+  geom_line() +
+  scale_x_log10() +
+  labs(x="lambda (log10-scale)", y="beta-hat coefficient estimate",
+       title="LASSO regularized coefficient for each lambda value") +
+  guides(color=FALSE)
+plot_LASSO_coefficients
+```
+
+Clearly, with so many predictors, the plot above is not very useful. Instead, let's only focus on the final few variables that drop out.
+
+```{r, echo=FALSE}
+# Get only coefficient values that have not been shrunken to zero,
+# for high values of lambda
+important_vars <- LASSO_coefficients %>%
+  filter(
+    term != "(Intercept)",
+    lambda >= lambda_inputs[length(lambda_inputs)-20],
+    estimate != 0
+  )
+# Hacky method to refill zeros in coefficient values to make the
+# plot look nicer
+refill_zeros <- important_vars %>%
+  group_by(term) %>%
+  summarize(lambda = max(lambda)) %>%
+  mutate(
+    lambda = lambda_inputs[match(lambda, lambda_inputs) + 1],
+    estimate = 0)
+important_vars <- important_vars %>%
+  rbind(refill_zeros[c("term", "estimate", "lambda")])
+
+important_vars %>% 
+  filter(term != "(Intercept)") %>% 
+  ggplot(aes(x=lambda, y=estimate, col=term)) +
+  geom_line() +
+  scale_x_log10() +
+  labs(x="lambda (log10-scale)", y="beta-hat coefficient estimate",
+       title="LASSO regularized coefficient for each lambda value")
+```
+
+Finally, we cross-validate to choose an optimal lambda-value.
+
+```{r}
+LASSO_CV <- cv.glmnet(x=predictor_matrix_train, y=train$log_price_doc, alpha=1, lambda=lambda_inputs)
+
+# Optimal lambdas
+lambda_star <- LASSO_CV$lambda.min
+lambda_star_1SE <- LASSO_CV$lambda.1se
+```
+
+```{r}
+plot(LASSO_CV)
+abline(v=log(lambda_star), col="red")
+abline(v=log(lambda_star_1SE), col="blue")
+```
+
+Using the 1-standard-error rule-of-thumb, we end up with a model with four variables: `full_sq`, `stadium_km`, `ts_km`, and `ttk_km`.
+
+```{r}
+important_vars %>% 
+  filter(term != "(Intercept)") %>% 
+  ggplot(aes(x=lambda, y=estimate, col=term)) +
+  geom_line() +
+  scale_x_log10() +
+  geom_vline(
+    xintercept = lambda_star_1SE, 
+    col="blue", alpha=0.4, linetype="dashed") +
+  labs(x="lambda (log10-scale)", y="beta-hat coefficient estimate",
+       title="LASSO regularized coefficient for each lambda value")
+```
+
+Finally, we create the submission files.
+
+```{r}
+LASSO_preds <- predict(LASSO_fit, newx=predictor_matrix_test, s=lambda_star_1SE)
+LASSO_submission <- sample_submission %>%
+  mutate(price_doc = LASSO_preds)
+
+lm <- lm(model_formula, data=train)
+lm_preds <- predict(lm, test)
+lm_submission <- sample_submission %>%
+  mutate(price_doc = lm_preds)
+
+write_csv(LASSO_submission, "LASSO_submission.csv")
+write_csv(lm_submission, "lm_submission.csv")
+```
 
 # Scoreboard
 
