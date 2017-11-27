@@ -22,6 +22,7 @@ knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=4.5, message=FALSE, w
 library(tidyverse)
 library(broom)
 library(glmnet)
+library(MLmetrics)
 
 train <- read_csv("data/train.csv")
 test <- read_csv("data/test.csv")
@@ -144,20 +145,34 @@ important_vars %>%
        title="LASSO regularized coefficient for each lambda value")
 ```
 
-Finally, we create the submission files.
+Next, we create the submission files.
 
 ```{r}
-LASSO_preds <- predict(LASSO_fit, newx=predictor_matrix_test, s=lambda_star_1SE)
-LASSO_submission <- sample_submission %>%
-  mutate(price_doc = LASSO_preds)
-
 lm <- lm(model_formula, data=train)
 lm_preds <- predict(lm, test)
 lm_submission <- sample_submission %>%
-  mutate(price_doc = lm_preds)
+  mutate(price_doc = exp(lm_preds))
 
-write_csv(LASSO_submission, "LASSO_submission.csv")
+LASSO_preds <- predict(LASSO_fit, 
+                       newx=predictor_matrix_test, 
+                       s=lambda_star_1SE)
+LASSO_submission <- sample_submission %>%
+  mutate(price_doc = exp(LASSO_preds))
+
 write_csv(lm_submission, "lm_submission.csv")
+write_csv(LASSO_submission, "LASSO_submission.csv")
+```
+
+Finally, we compute the root mean squared logarithmic training error for the two models.
+
+```{r}
+lm_preds_train <- predict(lm, train)
+LASSO_preds_train <- predict(LASSO_fit, 
+                             newx=predictor_matrix_train, 
+                             s=lambda_star_1SE)
+
+MLmetrics::RMSLE(lm_preds_train, train$log_price_doc)
+MLmetrics::RMSLE(LASSO_preds_train, train$log_price_doc)
 ```
 
 # Scoreboard
@@ -168,5 +183,5 @@ in these cells:
 
 Method                | Training Score  | Kaggle Score
 --------------------- | -------------   | -------------
-lm                    |                 |  
-LASSO crossvalidated  |                 |  
+lm                    |    0.0158       |    2.634
+LASSO crossvalidated  |    0.0355       |    0.489
